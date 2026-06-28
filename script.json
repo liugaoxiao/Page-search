@@ -1,0 +1,41 @@
+{
+  "contributors" : [
+
+  ],
+  "description" : null,
+  "remoteResource" : null,
+  "permissions" : null,
+  "iconImage" : null,
+  "name" : "页面搜索",
+  "localizedDescriptions" : {
+    "pt" : "",
+    "de" : "",
+    "ja" : "",
+    "ru" : "",
+    "fr" : "",
+    "zh" : "",
+    "en" : "",
+    "it" : "",
+    "es" : ""
+  },
+  "localizedNames" : {
+    "pt" : "",
+    "de" : "",
+    "ja" : "",
+    "ru" : "",
+    "fr" : "",
+    "zh" : "",
+    "en" : "",
+    "it" : "",
+    "es" : ""
+  },
+  "author" : null,
+  "entry" : "index.tsx",
+  "intentInputTypes" : [
+
+  ],
+  "icon" : "rectangle.and.text.magnifyingglass",
+  "color" : "rgba(230, 190, 1,1)",
+  "runInApp" : false,
+  "version" : "1.0.0"
+}

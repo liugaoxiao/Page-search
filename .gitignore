@@ -1,0 +1,14 @@
+# macOS / iOS editor artifacts
+.DS_Store
+
+# Dependencies and build outputs
+node_modules/
+dist/
+build/
+
+# Logs
+*.log
+
+# Environment / secrets
+.env
+.env.*
