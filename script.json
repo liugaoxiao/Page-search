@@ -1,23 +1,4 @@
 {
-  "contributors" : [
-
-  ],
-  "description" : null,
-  "remoteResource" : null,
-  "permissions" : null,
-  "iconImage" : null,
-  "name" : "页面搜索",
-  "localizedDescriptions" : {
-    "pt" : "",
-    "de" : "",
-    "ja" : "",
-    "ru" : "",
-    "fr" : "",
-    "zh" : "",
-    "en" : "",
-    "it" : "",
-    "es" : ""
-  },
   "localizedNames" : {
     "pt" : "",
     "de" : "",
@@ -29,13 +10,32 @@
     "it" : "",
     "es" : ""
   },
+  "iconImage" : null,
+  "localizedDescriptions" : {
+    "pt" : "",
+    "de" : "",
+    "ja" : "",
+    "ru" : "",
+    "fr" : "",
+    "zh" : "",
+    "en" : "",
+    "it" : "",
+    "es" : ""
+  },
+  "permissions" : null,
   "author" : null,
+  "description" : null,
+  "name" : "Page search",
+  "icon" : "rectangle.and.text.magnifyingglass",
+  "color" : "rgba(230, 190, 1,1)",
+  "runInApp" : false,
   "entry" : "index.tsx",
   "intentInputTypes" : [
 
   ],
-  "icon" : "rectangle.and.text.magnifyingglass",
-  "color" : "rgba(230, 190, 1,1)",
-  "runInApp" : false,
+  "remoteResource" : null,
+  "contributors" : [
+
+  ],
   "version" : "1.0.0"
 }
