@@ -21,6 +21,7 @@ declare const GM: {
 (() => {
   const ROOT_ID = "scripting-page-search-root"
   const STYLE_ID = "scripting-page-search-style"
+  const MARK_STYLE_ID = "scripting-page-search-mark-style"
   const MARK_CLASS = "scripting-page-search-mark"
   const ACTIVE_CLASS = "scripting-page-search-active"
   const STORAGE_KEY = "scripting-page-search-config-v4"
@@ -36,6 +37,8 @@ declare const GM: {
     glass: true,
     opacity: 86,
     blur: 18,
+    iconScale: 1,
+    uiWidthScale: 1,
     accentColor: "#2563eb",
     highlightColor: "#fde047",
     activeColor: "#fb923c",
@@ -90,6 +93,13 @@ declare const GM: {
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;").replace(/'/g, "&#039;")
 
+  const clampNumber = (value: any, min: number, max: number, fallback: number) => {
+    const number = Number(value)
+    return Number.isFinite(number) ? Math.min(max, Math.max(min, number)) : fallback
+  }
+
+  const formatScale = (value: any) => `${clampNumber(value, 1, 2, 1).toFixed(2).replace(/\.00$/, "").replace(/0$/, "")}×`
+
   const getDocs = () => {
     const docs = [document]
     if (!config.searchIframes) return docs
@@ -100,6 +110,27 @@ declare const GM: {
       } catch {}
     })
     return docs
+  }
+
+  const getFrameForDoc = (doc: Document) => {
+    if (doc === document) return null
+    for (const frame of Array.from(document.querySelectorAll<HTMLIFrameElement | HTMLFrameElement>("iframe, frame"))) {
+      try { if (frame.contentDocument === doc) return frame } catch {}
+    }
+    return null
+  }
+
+  const ensureDocStyle = (doc: Document) => {
+    let style = doc.getElementById(MARK_STYLE_ID) as HTMLStyleElement | null
+    if (!style) {
+      style = doc.createElement("style")
+      style.id = MARK_STYLE_ID
+      ;(doc.head || doc.documentElement).appendChild(style)
+    }
+    style.textContent = `
+      .${MARK_CLASS} { padding: 0 1px; border-radius: 3px; background: ${config.highlightColor} !important; color: #111827 !important; }
+      .${MARK_CLASS}.${ACTIVE_CLASS} { background: ${config.activeColor} !important; outline: 2px solid ${config.activeColor}; }
+    `
   }
 
   const root = () => document.getElementById(ROOT_ID)
@@ -123,12 +154,30 @@ declare const GM: {
         --ps-active: #fb923c;
         --ps-panel-bg: rgba(255,255,255,.86);
         --ps-blur: 18px;
+        --ps-input-font-size: 16px;
+        --ps-ui-panel-width: 171px;
+        --ps-ui-topbar-width: min(30.8vw, calc(var(--ps-ui-panel-width, 171px) * .66));
+        --ps-ui-panel-padding: 5px;
+        --ps-ui-title-font-size: 11px;
+        --ps-ui-gap: 7px;
+        --ps-ui-tab-width: 25px;
+        --ps-ui-tab-height: 22px;
+        --ps-ui-icon-size: 18px;
+        --ps-ui-toggle-icon-size: 23px;
+        --ps-ui-search-size: 28px;
+        --ps-ui-nav-size: 27px;
+        --ps-ui-input-pad-x: 6px;
+        --ps-ui-input-extra-height: 11px;
+        --ps-ui-status-font-size: 11px;
+        --ps-ui-result-font-size: 11px;
+        --ps-ui-setting-font-size: 11px;
+        --ps-ui-range-width: 70px;
         transform: translate3d(0,0,0);
         will-change: left, top;
       }
       #${ROOT_ID}.ps-bottom { bottom: 56px; }
       #${ROOT_ID}.ps-top { top: 8px; }
-      #${ROOT_ID}.ps-topbar { top: 5px; left: 6px; right: 6px; }
+      #${ROOT_ID}.ps-topbar { top: 5px; left: auto; right: 6px; width: var(--ps-ui-topbar-width, min(30.8vw, 113px)); }
       #${ROOT_ID}.ps-manual { right: auto; bottom: auto; }
       #${ROOT_ID} * { box-sizing: border-box; }
       #${ROOT_ID} button, #${ROOT_ID} label { -webkit-tap-highlight-color: transparent; }
@@ -141,54 +190,59 @@ declare const GM: {
         touch-action: none; -webkit-touch-callout: none; user-select: none; -webkit-user-select: none;
       }
       #${ROOT_ID}.ps-glass .ps-toggle { backdrop-filter: blur(var(--ps-blur)); -webkit-backdrop-filter: blur(var(--ps-blur)); }
-      #${ROOT_ID} .ps-toggle svg { width: 17px; height: 17px; display: block; stroke: currentColor; }
+      #${ROOT_ID} .ps-toggle svg { width: var(--ps-ui-toggle-icon-size, 23px); height: var(--ps-ui-toggle-icon-size, 23px); display: block; stroke: currentColor; }
       #${ROOT_ID} .ps-toggle:active { transform: scale(.96); }
       #${ROOT_ID}.ps-topbar .ps-toggle { width: 100%; height: 30px; border-radius: 9px; }
       #${ROOT_ID} .ps-panel {
         display: none;
-        width: min(288px, calc(100vw - 16px)); max-height: min(56vh, 400px); overflow: auto;
-        padding: 6px; border: 1px solid rgba(148, 163, 184, .38); border-radius: 11px;
+        flex-direction: column;
+        width: min(var(--ps-ui-panel-width, 171px), calc(100vw - 12px)); max-height: min(56vh, 400px); overflow: hidden;
+        padding: var(--ps-ui-panel-padding, 5px); border: 1px solid rgba(148, 163, 184, .38); border-radius: 10px;
         background: var(--ps-panel-bg); box-shadow: 0 8px 18px rgba(15, 23, 42, .2);
       }
       #${ROOT_ID}.ps-glass .ps-panel { backdrop-filter: blur(var(--ps-blur)); -webkit-backdrop-filter: blur(var(--ps-blur)); }
       #${ROOT_ID}.ps-topbar .ps-panel { width: 100%; max-height: min(50vh, 360px); }
       #${ROOT_ID}.ps-open .ps-toggle { display: none; }
-      #${ROOT_ID}.ps-open .ps-panel { display: block; }
-      #${ROOT_ID} .ps-title { position: relative; display: flex; align-items: center; justify-content: center; margin-bottom: 5px; min-height: 25px; color: #0f172a; font-size: 12px; font-weight: 800; text-align: center; cursor: move; touch-action: none; -webkit-touch-callout: none; user-select: none; -webkit-user-select: none; }
-      #${ROOT_ID} .ps-title > span:first-child { flex: 0 1 auto; min-width: 0; padding: 4px 28px; text-align: center; }
-      #${ROOT_ID} .ps-close { position: absolute; right: 0; top: 2px; width: 21px; height: 21px; border: 0; border-radius: 999px; background: rgba(241,245,249,.9); color: #334155; font-size: 14px; line-height: 1; }
-      #${ROOT_ID} .ps-tabs { display: grid; grid-template-columns: repeat(3,1fr); gap: 3px; padding: 2px; margin-bottom: 5px; border-radius: 9px; background: rgba(241,245,249,.82); }
-      #${ROOT_ID} .ps-tab { height: 23px; border: 0; border-radius: 7px; background: transparent; color: #475569; font-size: 11px; font-weight: 800; }
+      #${ROOT_ID}.ps-open .ps-panel { display: flex; }
+      #${ROOT_ID} .ps-title { flex: 0 0 auto; position: relative; display: flex; align-items: center; justify-content: center; margin-bottom: var(--ps-ui-gap, 3px); min-height: calc(var(--ps-ui-tab-height, 22px) + 1px); color: #0f172a; font-size: var(--ps-ui-title-font-size, 11px); font-weight: 800; text-align: center; cursor: move; touch-action: none; -webkit-touch-callout: none; user-select: none; -webkit-user-select: none; }
+      #${ROOT_ID} .ps-title > span:first-child { flex: 0 1 auto; min-width: 0; padding: 3px 24px; text-align: center; }
+      #${ROOT_ID} .ps-close { position: absolute; right: 0; top: 2px; width: calc(var(--ps-ui-tab-height, 22px) - 2px); height: calc(var(--ps-ui-tab-height, 22px) - 2px); border: 0; border-radius: 999px; background: rgba(241,245,249,.9); color: #334155; font-size: var(--ps-ui-title-font-size, 11px); line-height: 1; }
+      #${ROOT_ID} .ps-tabs { flex: 0 0 auto; display: flex; justify-content: space-evenly; gap: 0; padding: 2px; margin-bottom: var(--ps-ui-gap, 3px); border-radius: 8px; background: rgba(241,245,249,.82); }
+      #${ROOT_ID} .ps-tab { flex: 1 1 0; width: auto; height: var(--ps-ui-tab-height, 22px); padding: 0; border: 0; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; background: transparent; color: #475569; }
       #${ROOT_ID} .ps-tab.ps-active { background: rgba(255,255,255,.92); color: var(--ps-accent); box-shadow: 0 1px 2px rgba(15,23,42,.08); }
-      #${ROOT_ID} .ps-page { display: none; }
-      #${ROOT_ID} .ps-page.ps-active { display: block; }
-      #${ROOT_ID} .ps-row { display: flex; gap: 4px; margin-bottom: 4px; }
-      #${ROOT_ID} .ps-actions { flex-wrap: wrap; }
+      #${ROOT_ID} .ps-tab svg, #${ROOT_ID} .ps-search svg, #${ROOT_ID} .ps-nav svg { width: var(--ps-ui-icon-size, 14px); height: var(--ps-ui-icon-size, 14px); display: block; stroke: currentColor; fill: none; }
+      #${ROOT_ID} .ps-page { display: none; min-height: 0; overflow: auto; -webkit-overflow-scrolling: touch; }
+      #${ROOT_ID} .ps-page.ps-active { display: block; flex: 1 1 auto; }
+      #${ROOT_ID} .ps-row { display: flex; gap: var(--ps-ui-gap, 3px); margin-bottom: var(--ps-ui-gap, 3px); }
+      #${ROOT_ID} .ps-search-row { justify-content: center; }
+      #${ROOT_ID} .ps-search-row .ps-input { flex: 1 1 auto; width: auto; }
+      #${ROOT_ID} .ps-actions { justify-content: space-evenly; gap: 0; }
       #${ROOT_ID} input[type="search"], #${ROOT_ID} input[type="text"] {
-        flex: 1; min-width: 0; height: 28px; padding: 0 8px; border: 1px solid #cbd5e1; border-radius: 9px;
-        outline: none; background: rgba(255,255,255,.92); color: #0f172a; font-size: 16px;
+        flex: 1; min-width: 0; min-height: var(--ps-ui-search-size, 28px); height: calc(var(--ps-input-font-size, 16px) + var(--ps-ui-input-extra-height, 11px)); padding: 0 var(--ps-ui-input-pad-x, 6px); border: 1px solid #cbd5e1; border-radius: 8px;
+        outline: none; background: rgba(255,255,255,.92); color: #0f172a; font-size: var(--ps-input-font-size, 16px); line-height: 1.2;
         -webkit-text-size-adjust: 100%;
       }
       #${ROOT_ID} input[type="search"]:focus, #${ROOT_ID} input[type="text"]:focus { border-color: var(--ps-accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--ps-accent) 12%, transparent); }
-      #${ROOT_ID} .ps-search { height: 28px; padding: 0 8px; border: 0; border-radius: 7px; background: var(--ps-accent); color: white; font-size: 12px; font-weight: 800; }
-      #${ROOT_ID} .ps-nav { flex: 1 1 52px; min-width: 0; height: 26px; padding: 0 4px; border: 0; border-radius: 7px; background: color-mix(in srgb, var(--ps-accent) 9%, white); color: var(--ps-accent); font-size: 11px; font-weight: 800; }
+      #${ROOT_ID} .ps-search { flex: 0 0 var(--ps-ui-search-size, 28px); width: var(--ps-ui-search-size, 28px); height: var(--ps-ui-search-size, 28px); padding: 0; border: 0; border-radius: 7px; display: inline-flex; align-items: center; justify-content: center; background: var(--ps-accent); color: white; }
+      #${ROOT_ID} .ps-nav { flex: 0 0 var(--ps-ui-nav-size, 27px); min-width: 0; width: var(--ps-ui-nav-size, 27px); height: calc(var(--ps-ui-nav-size, 27px) - 2px); padding: 0; border: 0; border-radius: 7px; display: inline-flex; align-items: center; justify-content: center; background: color-mix(in srgb, var(--ps-accent) 9%, white); color: var(--ps-accent); }
       #${ROOT_ID} .ps-clear { background: rgba(248,250,252,.9); color: #475569; }
-      #${ROOT_ID} .ps-status { min-height: 14px; margin: 0 2px 4px; color: #64748b; font-size: 11px; }
+      #${ROOT_ID} .ps-status { min-height: 14px; margin: 0 2px var(--ps-ui-gap, 3px); color: #64748b; font-size: var(--ps-ui-status-font-size, 11px); }
       #${ROOT_ID} .ps-status:empty { display: none; }
-      #${ROOT_ID} .ps-result-list, #${ROOT_ID} .ps-history-list { display: none; max-height: 125px; overflow: auto; margin-top: 4px; border: 1px solid #e2e8f0; border-radius: 9px; background: rgba(248,250,252,.8); }
+      #${ROOT_ID} .ps-result-list, #${ROOT_ID} .ps-history-list { display: none; max-height: 125px; overflow: auto; margin-top: var(--ps-ui-gap, 3px); border: 1px solid #e2e8f0; border-radius: 9px; background: rgba(248,250,252,.8); }
       #${ROOT_ID} .ps-result-list.ps-visible, #${ROOT_ID} .ps-history-list.ps-visible { display: block; }
-      #${ROOT_ID} .ps-result, #${ROOT_ID} .ps-history-item { width: 100%; display: block; padding: 6px 7px; border: 0; border-bottom: 1px solid #e2e8f0; background: transparent; color: #334155; text-align: left; line-height: 1.25; font-size: 11px; }
+      #${ROOT_ID} .ps-history-actions { justify-content: flex-end; margin-top: var(--ps-ui-gap, 3px); margin-bottom: 0; }
+      #${ROOT_ID} .ps-result, #${ROOT_ID} .ps-history-item { width: 100%; display: block; padding: 6px 7px; border: 0; border-bottom: 1px solid #e2e8f0; background: transparent; color: #334155; text-align: left; line-height: 1.25; font-size: var(--ps-ui-result-font-size, 11px); }
       #${ROOT_ID} .ps-result:last-child, #${ROOT_ID} .ps-history-item:last-child { border-bottom: 0; }
       #${ROOT_ID} .ps-result.ps-current { background: color-mix(in srgb, var(--ps-accent) 14%, white); color: #1e3a8a; }
       #${ROOT_ID} .ps-result-index { font-weight: 900; margin-right: 3px; color: var(--ps-accent); }
-      #${ROOT_ID} .ps-setting { display: flex; gap: 6px; align-items: center; justify-content: space-between; padding: 5px 1px; border-bottom: 1px solid #e2e8f0; color: #0f172a; font-size: 11px; }
+      #${ROOT_ID} .ps-setting { display: flex; gap: 6px; align-items: center; justify-content: space-between; padding: 5px 1px; border-bottom: 1px solid #e2e8f0; color: #0f172a; font-size: var(--ps-ui-setting-font-size, 11px); }
       #${ROOT_ID} .ps-setting:last-child { border-bottom: 0; }
-      #${ROOT_ID} .ps-setting small { display: block; margin-top: 1px; color: #64748b; font-size: 10px; line-height: 1.2; }
+      #${ROOT_ID} .ps-setting small { display: block; margin-top: 1px; color: #64748b; font-size: calc(var(--ps-ui-setting-font-size, 11px) - 1px); line-height: 1.2; }
       #${ROOT_ID} input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--ps-accent); }
       #${ROOT_ID} input[type="color"] { width: 32px; height: 23px; border: 0; background: transparent; }
-      #${ROOT_ID} input[type="range"] { width: 82px; accent-color: var(--ps-accent); }
-      #${ROOT_ID} select { height: 27px; padding: 0 5px; border-radius: 7px; border: 1px solid #cbd5e1; background: rgba(255,255,255,.92); color: #0f172a; font-size: 11px; }
-      #${ROOT_ID} .ps-reset-position { flex: 0 0 auto; min-width: 74px; }
+      #${ROOT_ID} input[type="range"] { width: var(--ps-ui-range-width, 70px); accent-color: var(--ps-accent); }
+      #${ROOT_ID} select { height: var(--ps-ui-search-size, 28px); padding: 0 5px; border-radius: 7px; border: 1px solid #cbd5e1; background: rgba(255,255,255,.92); color: #0f172a; font-size: var(--ps-ui-setting-font-size, 11px); }
+      #${ROOT_ID} .ps-reset-position { flex: 0 0 auto; width: auto; min-width: 52px; padding: 0 6px; font-size: calc(var(--ps-ui-setting-font-size, 11px) - 1px); font-weight: 800; }
       .${MARK_CLASS} { padding: 0 1px; border-radius: 3px; background: var(--ps-highlight, #fde047) !important; color: #111827 !important; }
       .${MARK_CLASS}.${ACTIVE_CLASS} { background: var(--ps-active, #fb923c) !important; outline: 2px solid var(--ps-active, #ea580c); }
     `
@@ -233,6 +287,87 @@ declare const GM: {
     el.style.setProperty("--ps-active", config.activeColor)
     el.style.setProperty("--ps-blur", `${config.blur}px`)
     el.style.setProperty("--ps-panel-bg", config.glass ? `rgba(255,255,255,${Number(config.opacity) / 100})` : "rgba(255,255,255,.98)")
+    updateZoomCompensation()
+  }
+
+  const getPageZoomScale = () => {
+    const screenWidth = Number(screen.width) || window.innerWidth || 1
+    const viewportScale = Number(window.visualViewport?.scale) || 1
+    const layoutScale = window.innerWidth > 0 ? Math.min(1, screenWidth / window.innerWidth) : 1
+    return Math.max(0.4, Math.min(1, viewportScale, layoutScale))
+  }
+
+  const updateZoomCompensation = () => {
+    const el = root()
+    if (!el) return
+    const scale = getPageZoomScale()
+    const boost = Math.max(1, Math.min(2.2, 1 / scale))
+    const iconScale = clampNumber(config.iconScale, 1, 2, 1)
+    const widthScale = clampNumber(config.uiWidthScale, 1, 2, 1)
+    const px = (base: number, max = Math.ceil(base * 2.2), multiplier = 1) => `${Math.min(max, Math.max(base, Math.round(base * boost * multiplier)))}px`
+    const fontSize = Math.min(40, Math.max(16, Math.ceil(16 / scale)))
+    el.style.setProperty("--ps-input-font-size", `${fontSize}px`)
+    el.style.setProperty("--ps-ui-panel-width", px(171, 520, widthScale))
+    el.style.setProperty("--ps-ui-topbar-width", `min(92vw, ${px(113, 420, widthScale)})`)
+    el.style.setProperty("--ps-ui-panel-padding", px(5, 10))
+    el.style.setProperty("--ps-ui-title-font-size", px(11, 22))
+    el.style.setProperty("--ps-ui-gap", px(7, 15))
+    el.style.setProperty("--ps-ui-tab-width", px(25, 52))
+    el.style.setProperty("--ps-ui-tab-height", px(22, 46))
+    el.style.setProperty("--ps-ui-icon-size", px(18, 76, iconScale))
+    el.style.setProperty("--ps-ui-toggle-icon-size", px(23, 92, iconScale))
+    el.style.setProperty("--ps-ui-search-size", px(28, 58))
+    el.style.setProperty("--ps-ui-nav-size", px(27, 56))
+    el.style.setProperty("--ps-ui-input-pad-x", px(6, 14))
+    el.style.setProperty("--ps-ui-input-extra-height", px(11, 24))
+    el.style.setProperty("--ps-ui-status-font-size", px(11, 22))
+    el.style.setProperty("--ps-ui-result-font-size", px(11, 22))
+    el.style.setProperty("--ps-ui-setting-font-size", px(11, 22))
+    el.style.setProperty("--ps-ui-range-width", px(70, 140))
+  }
+
+  let viewportMeta: HTMLMetaElement | null = null
+  let viewportMetaContent: string | null = null
+  let viewportMetaCreated = false
+
+  const lockViewportZoom = () => {
+    updateZoomCompensation()
+    viewportMeta = document.querySelector('meta[name="viewport"]')
+    viewportMetaCreated = !viewportMeta
+    if (!viewportMeta) {
+      viewportMeta = document.createElement("meta")
+      viewportMeta.name = "viewport"
+      document.head?.appendChild(viewportMeta)
+    }
+    viewportMetaContent = viewportMeta.getAttribute("content")
+    const content = viewportMetaContent || "width=device-width, initial-scale=1"
+    const parts = content.split(",").map((part) => part.trim()).filter((part) => part && !/^(maximum-scale|user-scalable)\s*=/i.test(part))
+    parts.push("maximum-scale=1", "user-scalable=no")
+    viewportMeta.setAttribute("content", parts.join(", "))
+  }
+
+  const unlockViewportZoom = () => {
+    setTimeout(() => {
+      if (document.activeElement === input()) return
+      if (!viewportMeta) return
+      if (viewportMetaCreated) viewportMeta.remove()
+      else if (viewportMetaContent == null) viewportMeta.removeAttribute("content")
+      else viewportMeta.setAttribute("content", viewportMetaContent)
+      viewportMeta = null
+      viewportMetaContent = null
+      viewportMetaCreated = false
+    }, 250)
+  }
+
+  const setupInputZoomGuard = (el: HTMLElement) => {
+    el.addEventListener("focusin", (event) => {
+      if (event.target instanceof HTMLInputElement && event.target.classList.contains("ps-input")) lockViewportZoom()
+    })
+    el.addEventListener("focusout", (event) => {
+      if (event.target instanceof HTMLInputElement && event.target.classList.contains("ps-input")) unlockViewportZoom()
+    })
+    window.visualViewport?.addEventListener("resize", updateZoomCompensation)
+    window.addEventListener("resize", updateZoomCompensation)
   }
 
   const switchTab = (tab: string) => {
@@ -242,19 +377,41 @@ declare const GM: {
     if (tab === "history") renderHistory()
   }
 
-  const isVisible = (element: HTMLElement) => {
-    const style = getComputedStyle(element)
-    return style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0"
+  const isSearchableElement = (element: HTMLElement) => {
+    let current: HTMLElement | null = element
+    while (current && current !== current.ownerDocument.documentElement) {
+      if (current.id === ROOT_ID || (current !== element && current.classList?.contains(MARK_CLASS))) return false
+      if (current.hidden || current.getAttribute("aria-hidden") === "true" || current.hasAttribute("inert")) return false
+      const tag = current.tagName.toLowerCase()
+      if (["script", "style", "noscript", "textarea", "input", "select", "option", "template"].includes(tag)) return false
+      if (tag === "details" && !(current as HTMLDetailsElement).open && element !== current) return false
+      const style = getComputedStyle(current)
+      if (style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse" || style.opacity === "0") return false
+      current = current.parentElement
+    }
+    return true
   }
+
+  const isVisible = (element: HTMLElement) => isSearchableElement(element)
 
   const shouldSkip = (node: Node) => {
     const parent = node.parentElement
     if (!parent) return true
-    const tag = parent.tagName.toLowerCase()
-    return ["script", "style", "noscript", "textarea", "input", "select", "option"].includes(tag)
-      || Boolean(parent.closest(`#${ROOT_ID}`))
-      || Boolean(parent.closest(`.${MARK_CLASS}`))
-      || !isVisible(parent)
+    return !isSearchableElement(parent)
+  }
+
+  const isLocatableMark = (mark: HTMLElement) => {
+    if (!mark.isConnected || !mark.ownerDocument.body?.contains(mark)) return false
+    if (!isSearchableElement(mark)) return false
+    const rects = Array.from(mark.getClientRects()).filter((rect) => rect.width > 0 && rect.height > 0)
+    return rects.length > 0
+  }
+
+  const pruneMatches = () => {
+    matches = matches.filter(isLocatableMark)
+    if (!matches.length) activeIndex = -1
+    else if (activeIndex >= matches.length) activeIndex = matches.length - 1
+    else if (activeIndex < 0) activeIndex = 0
   }
 
   const clear = () => {
@@ -340,6 +497,7 @@ declare const GM: {
   const renderResults = () => {
     const list = document.querySelector<HTMLElement>(`#${ROOT_ID} .ps-result-list`)
     if (!list) return
+    pruneMatches()
     list.classList.toggle("ps-visible", config.showResults && matches.length > 0)
     if (!config.showResults || !matches.length) { list.innerHTML = ""; return }
     const max = Math.min(matches.length, 100)
@@ -360,22 +518,27 @@ declare const GM: {
   }
 
   const updateActive = () => {
+    pruneMatches()
     matches.forEach((mark) => mark.classList.remove(ACTIVE_CLASS))
     const active = matches[activeIndex]
-    if (!active) return
+    if (!active) { renderResults(); return }
     active.classList.add(ACTIVE_CLASS)
     active.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" })
+    const frame = getFrameForDoc(active.ownerDocument)
+    frame?.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" })
     setStatus(`“${keyword}”：第 ${activeIndex + 1} / ${matches.length} 个结果`)
     renderResults()
   }
 
   const go = (step: number) => {
-    if (!matches.length) { setStatus("请先搜索关键字"); return }
+    pruneMatches()
+    if (!matches.length) { setStatus("请先搜索关键字"); renderResults(); return }
     activeIndex = (activeIndex + step + matches.length) % matches.length
     updateActive()
   }
 
   const jumpTo = (index: number) => {
+    pruneMatches()
     if (index < 0 || index >= matches.length) return
     activeIndex = index
     updateActive()
@@ -392,6 +555,7 @@ declare const GM: {
 
     keyword = value
     getDocs().forEach((doc) => {
+      ensureDocStyle(doc)
       const textNodes = []
       const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT, {
         acceptNode(node) {
@@ -404,7 +568,8 @@ declare const GM: {
       textNodes.forEach((textNode) => highlightNode(textNode, matchers))
     })
 
-    if (!matches.length) { setStatus(`未找到“${value}”`); return }
+    pruneMatches()
+    if (!matches.length) { setStatus(`未找到可在当前页面定位的“${value}”`); return }
     addToHistory(value)
     activeIndex = 0
     updateActive()
@@ -412,7 +577,8 @@ declare const GM: {
   }
 
   const copyResult = async () => {
-    if (!matches.length) { setStatus("没有可复制的搜索结果"); return }
+    pruneMatches()
+    if (!matches.length) { setStatus("没有可复制的搜索结果"); renderResults(); return }
     const index = activeIndex >= 0 && activeIndex < matches.length ? activeIndex : 0
     const text = [`页面：${document.title}`, `网址：${location.href}`, `关键字：${keyword}`, `序号：${index + 1} / ${matches.length}`, "", getSnippet(matches[index])].join("\n")
     try {
@@ -427,11 +593,13 @@ declare const GM: {
     const page = document.querySelector<HTMLElement>(`#${ROOT_ID} [data-page="settings"]`)
     if (!page) return
     page.innerHTML = `
-      <label class="ps-setting"><span>显示位置<small>悬浮底部、悬浮顶部或固定顶部搜索条；拖动搜索按钮或标题可手动移动悬浮位置</small></span><select class="ps-config-position"><option value="bottom" ${config.position === "bottom" ? "selected" : ""}>底部悬浮</option><option value="top" ${config.position === "top" ? "selected" : ""}>顶部悬浮</option><option value="topbar" ${config.position === "topbar" ? "selected" : ""}>顶部搜索条</option></select></label>
+      <label class="ps-setting"><span>显示位置</span><select class="ps-config-position"><option value="bottom" ${config.position === "bottom" ? "selected" : ""}>底部悬浮</option><option value="top" ${config.position === "top" ? "selected" : ""}>顶部悬浮</option><option value="topbar" ${config.position === "topbar" ? "selected" : ""}>顶部搜索条</option></select></label>
       <label class="ps-setting"><span>手动位置<small>${config.floatingPosition ? "已保存拖动位置" : "未手动移动，默认右下角悬浮"}</small></span><button class="ps-nav ps-reset-position" type="button">重置</button></label>
-      <label class="ps-setting"><span>磨砂玻璃 UI<small>开启后使用透明背景和背景模糊</small></span><input class="ps-config-glass" type="checkbox" ${config.glass ? "checked" : ""} /></label>
-      <label class="ps-setting"><span>透明度<small>${config.opacity}%：数值越低越透明</small></span><input class="ps-config-opacity" type="range" min="45" max="100" value="${config.opacity}" /></label>
+      <label class="ps-setting"><span>磨砂玻璃 UI</span><input class="ps-config-glass" type="checkbox" ${config.glass ? "checked" : ""} /></label>
+      <label class="ps-setting"><span>透明度<small>${config.opacity}%：数值越低越透明</small></span><input class="ps-config-opacity" type="range" min="0" max="100" value="${config.opacity}" /></label>
       <label class="ps-setting"><span>模糊强度<small>${config.blur}px</small></span><input class="ps-config-blur" type="range" min="0" max="35" value="${config.blur}" /></label>
+      <label class="ps-setting"><span>图标放大<small>${formatScale(config.iconScale)}</small></span><input class="ps-config-icon-scale" type="range" min="1" max="2" step="0.05" value="${clampNumber(config.iconScale, 1, 2, 1)}" /></label>
+      <label class="ps-setting"><span>UI 横向拓宽<small>${formatScale(config.uiWidthScale)}</small></span><input class="ps-config-ui-width" type="range" min="1" max="2" step="0.05" value="${clampNumber(config.uiWidthScale, 1, 2, 1)}" /></label>
       <label class="ps-setting"><span>主题色</span><input class="ps-config-accent" type="color" value="${config.accentColor}" /></label>
       <label class="ps-setting"><span>高亮颜色</span><input class="ps-config-highlight" type="color" value="${config.highlightColor}" /></label>
       <label class="ps-setting"><span>当前结果颜色</span><input class="ps-config-active" type="color" value="${config.activeColor}" /></label>
@@ -440,6 +608,7 @@ declare const GM: {
       <label class="ps-setting"><span>多关键字<small>非正则模式下，用逗号、中文逗号、换行或两个以上空格分隔</small></span><input class="ps-config-multi" type="checkbox" ${config.multiKeyword ? "checked" : ""} /></label>
       <label class="ps-setting"><span>搜索同源 iframe<small>只能搜索浏览器允许访问的同源 iframe</small></span><input class="ps-config-iframes" type="checkbox" ${config.searchIframes ? "checked" : ""} /></label>
       <label class="ps-setting"><span>显示搜索结果列表</span><input class="ps-config-results" type="checkbox" ${config.showResults ? "checked" : ""} /></label>
+      <label class="ps-setting"><span>输入框防放大<small>已启用动态字体补偿：页面从 100% 缩小到 50% 时，聚焦搜索框也尽量不触发 iOS Safari 自动放大</small></span><small>自动</small></label>
       <label class="ps-setting"><span>快捷键打开<small>默认 Option/Alt + K</small></span><input class="ps-config-shortcut-enabled" type="checkbox" ${config.shortcutEnabled ? "checked" : ""} /></label>
       <label class="ps-setting"><span>快捷键字母</span><input class="ps-config-shortcut" type="text" maxlength="1" value="${escapeHtml(config.shortcutKey)}" /></label>
     `
@@ -460,15 +629,24 @@ declare const GM: {
     el.innerHTML = `
       <button class="ps-toggle" type="button" title="搜索页面关键字" aria-label="搜索页面关键字"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M10.8 18.1a7.3 7.3 0 1 1 0-14.6 7.3 7.3 0 0 1 0 14.6Z" stroke-width="2.4" stroke-linecap="round"/><path d="m16.2 16.2 4.3 4.3" stroke-width="2.4" stroke-linecap="round"/></svg></button>
       <div class="ps-panel">
-        <div class="ps-title"><span>页面关键字搜索</span><button class="ps-close" type="button" title="收起">×</button></div>
-        <div class="ps-tabs"><button class="ps-tab ps-active" type="button" data-tab="search">搜索</button><button class="ps-tab" type="button" data-tab="history">历史</button><button class="ps-tab" type="button" data-tab="settings">配置</button></div>
+        <div class="ps-title"><span>Page search</span><button class="ps-close" type="button" title="收起">×</button></div>
+        <div class="ps-tabs">
+          <button class="ps-tab ps-active" type="button" data-tab="search" title="搜索" aria-label="搜索"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.8 18.1a7.3 7.3 0 1 1 0-14.6 7.3 7.3 0 0 1 0 14.6Z" stroke-width="2.2" stroke-linecap="round"/><path d="m16.2 16.2 4.3 4.3" stroke-width="2.2" stroke-linecap="round"/></svg></button>
+          <button class="ps-tab" type="button" data-tab="history" title="历史" aria-label="历史"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.35-5.65" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 5.5v4h4" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 7.5V12l3 2" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          <button class="ps-tab" type="button" data-tab="settings" title="配置" aria-label="配置"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4Z" stroke-width="2.1"/><path d="M19.4 13.5a7.8 7.8 0 0 0 0-3l2-1.5-2-3.5-2.4 1a8 8 0 0 0-2.6-1.5L14 2.5h-4l-.4 2.5A8 8 0 0 0 7 6.5l-2.4-1-2 3.5 2 1.5a7.8 7.8 0 0 0 0 3l-2 1.5 2 3.5 2.4-1a8 8 0 0 0 2.6 1.5l.4 2.5h4l.4-2.5A8 8 0 0 0 17 17.5l2.4 1 2-3.5-2-1.5Z" stroke-width="1.8" stroke-linejoin="round"/></svg></button>
+        </div>
         <div class="ps-page ps-active" data-page="search">
-          <div class="ps-row"><input class="ps-input" type="search" placeholder="多关键字用逗号或双空格分隔" autocomplete="off" /><button class="ps-search" type="button">搜索</button></div>
+          <div class="ps-row ps-search-row"><input class="ps-input" type="search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" inputmode="search" /><button class="ps-search" type="button" title="搜索" aria-label="搜索"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.8 18.1a7.3 7.3 0 1 1 0-14.6 7.3 7.3 0 0 1 0 14.6Z" stroke-width="2.2" stroke-linecap="round"/><path d="m16.2 16.2 4.3 4.3" stroke-width="2.2" stroke-linecap="round"/></svg></button></div>
           <div class="ps-status"></div>
-          <div class="ps-row ps-actions"><button class="ps-nav ps-prev" type="button">上一个</button><button class="ps-nav ps-next" type="button">下一个</button><button class="ps-nav ps-export" type="button">复制结果</button><button class="ps-nav ps-clear" type="button">清除</button></div>
+          <div class="ps-row ps-actions">
+            <button class="ps-nav ps-prev" type="button" title="上一个" aria-label="上一个"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+            <button class="ps-nav ps-next" type="button" title="下一个" aria-label="下一个"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+            <button class="ps-nav ps-export" type="button" title="复制结果" aria-label="复制结果"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 8.5h8a2 2 0 0 1 2 2V19a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2v-8.5a2 2 0 0 1 2-2Z" stroke-width="2" stroke-linejoin="round"/><path d="M9 5a2 2 0 0 1 2-2h5.5a2.5 2.5 0 0 1 2.5 2.5V14" stroke-width="2" stroke-linecap="round"/></svg></button>
+            <button class="ps-nav ps-clear" type="button" title="清除" aria-label="清除"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16" stroke-width="2.1" stroke-linecap="round"/><path d="M10 11v6M14 11v6" stroke-width="2.1" stroke-linecap="round"/><path d="M6 7l1 14h10l1-14" stroke-width="2.1" stroke-linejoin="round"/><path d="M9 7V4h6v3" stroke-width="2.1" stroke-linejoin="round"/></svg></button>
+          </div>
           <div class="ps-result-list"></div>
         </div>
-        <div class="ps-page" data-page="history"><div class="ps-row"><button class="ps-nav ps-clear-history" type="button">清空历史</button></div><div class="ps-history-list"></div></div>
+        <div class="ps-page" data-page="history"><div class="ps-history-list"></div><div class="ps-row ps-history-actions"><button class="ps-nav ps-clear-history" type="button" title="清空历史" aria-label="清空历史"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16" stroke-width="2.1" stroke-linecap="round"/><path d="M10 11v6M14 11v6" stroke-width="2.1" stroke-linecap="round"/><path d="M6 7l1 14h10l1-14" stroke-width="2.1" stroke-linejoin="round"/><path d="M9 7V4h6v3" stroke-width="2.1" stroke-linejoin="round"/></svg></button></div></div>
         <div class="ps-page" data-page="settings"></div>
       </div>
     `
@@ -510,6 +688,7 @@ declare const GM: {
     })
     el.addEventListener("input", handleConfigChange)
     el.addEventListener("change", handleConfigChange)
+    setupInputZoomGuard(el)
     setupDrag(el)
   }
 
@@ -585,8 +764,10 @@ declare const GM: {
       if (target.value === "bottom") config.floatingPosition = null
     }
     if (target.classList.contains("ps-config-glass")) config.glass = target.checked
-    if (target.classList.contains("ps-config-opacity")) config.opacity = Number(target.value)
+    if (target.classList.contains("ps-config-opacity")) config.opacity = clampNumber(target.value, 0, 100, defaultConfig.opacity)
     if (target.classList.contains("ps-config-blur")) config.blur = Number(target.value)
+    if (target.classList.contains("ps-config-icon-scale")) config.iconScale = clampNumber(target.value, 1, 2, 1)
+    if (target.classList.contains("ps-config-ui-width")) config.uiWidthScale = clampNumber(target.value, 1, 2, 1)
     if (target.classList.contains("ps-config-accent")) config.accentColor = target.value
     if (target.classList.contains("ps-config-highlight")) config.highlightColor = target.value
     if (target.classList.contains("ps-config-active")) config.activeColor = target.value
@@ -611,6 +792,7 @@ declare const GM: {
 
   const init = async () => {
     config = { ...defaultConfig, ...(await loadStored(STORAGE_KEY, {})) }
+    config.opacity = clampNumber(config.opacity, 0, 100, defaultConfig.opacity)
     history = await loadStored(HISTORY_KEY, [])
     createPanel()
     GM.registerMenuCommand?.("打开页面关键字搜索", () => openPanel("search"))

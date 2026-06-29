@@ -1,41 +1,41 @@
 {
+  "author" : null,
+  "version" : "1.1.2",
+  "permissions" : null,
+  "description" : null,
   "localizedNames" : {
     "pt" : "",
-    "de" : "",
     "ja" : "",
-    "ru" : "",
-    "fr" : "",
-    "zh" : "",
     "en" : "",
-    "it" : "",
-    "es" : ""
-  },
-  "iconImage" : null,
-  "localizedDescriptions" : {
-    "pt" : "",
-    "de" : "",
-    "ja" : "",
-    "ru" : "",
     "fr" : "",
-    "zh" : "",
-    "en" : "",
     "it" : "",
-    "es" : ""
+    "zh" : "",
+    "es" : "",
+    "ru" : "",
+    "de" : ""
   },
-  "permissions" : null,
-  "author" : null,
-  "description" : null,
-  "name" : "Page search",
-  "icon" : "rectangle.and.text.magnifyingglass",
   "color" : "rgba(230, 190, 1,1)",
   "runInApp" : false,
-  "entry" : "index.tsx",
+  "name" : "Page search",
   "intentInputTypes" : [
 
   ],
-  "remoteResource" : null,
+  "localizedDescriptions" : {
+    "it" : "",
+    "fr" : "",
+    "ru" : "",
+    "de" : "",
+    "pt" : "",
+    "zh" : "",
+    "ja" : "",
+    "es" : "",
+    "en" : ""
+  },
+  "icon" : "rectangle.and.text.magnifyingglass",
   "contributors" : [
 
   ],
-  "version" : "1.1.0"
+  "remoteResource" : null,
+  "iconImage" : null,
+  "entry" : "index.tsx"
 }
