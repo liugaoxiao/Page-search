@@ -12,3 +12,17 @@ build/
 # Environment / secrets
 .env
 .env.*
+
+# Runtime/private data (do not publish personal search history or settings)
+.history/
+history/
+config/
+storage/
+storages/
+*.history
+*.history.json
+*.config.json
+*-history*.json
+*-config*.json
+scripting-page-search-history*
+scripting-page-search-config*
