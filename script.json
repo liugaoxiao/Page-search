@@ -1,41 +1,45 @@
 {
-  "author" : null,
-  "version" : "1.1.2",
-  "permissions" : null,
   "description" : null,
-  "localizedNames" : {
-    "pt" : "",
-    "ja" : "",
-    "en" : "",
-    "fr" : "",
-    "it" : "",
-    "zh" : "",
-    "es" : "",
-    "ru" : "",
-    "de" : ""
-  },
-  "color" : "rgba(230, 190, 1,1)",
+  "icon" : "rectangle.and.text.magnifyingglass",
+  "author" : null,
+  "permissions" : null,
   "runInApp" : false,
   "name" : "Page search",
+  "localizedDescriptions" : {
+    "ja" : "",
+    "zh" : "",
+    "ru" : "",
+    "en" : "",
+    "pt" : "",
+    "de" : "",
+    "fr" : "",
+    "es" : "",
+    "it" : ""
+  },
+  "remoteResource" : {
+    "autoUpdateInterval" : null,
+    "hash" : "1d4c41d7dc3ee1e0a2987e1192f014d8",
+    "url" : "https:\/\/github.com\/liugaoxiao\/Page-search"
+  },
+  "entry" : "index.tsx",
   "intentInputTypes" : [
 
   ],
-  "localizedDescriptions" : {
-    "it" : "",
-    "fr" : "",
-    "ru" : "",
-    "de" : "",
-    "pt" : "",
-    "zh" : "",
-    "ja" : "",
-    "es" : "",
-    "en" : ""
-  },
-  "icon" : "rectangle.and.text.magnifyingglass",
+  "color" : "rgba(230, 190, 1,1)",
   "contributors" : [
 
   ],
-  "remoteResource" : null,
-  "iconImage" : null,
-  "entry" : "index.tsx"
+  "version" : "1.1.3",
+  "localizedNames" : {
+    "ru" : "",
+    "it" : "",
+    "pt" : "",
+    "en" : "",
+    "fr" : "",
+    "de" : "",
+    "es" : "",
+    "zh" : "",
+    "ja" : ""
+  },
+  "iconImage" : null
 }
