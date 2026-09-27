@@ -1,3 +1,4 @@
+"use strict";
 // ==UserScript==
 // @name 页面关键字搜索
 // @description 页面关键字搜索：高亮、结果列表、历史、多关键字、正则、快捷键、单条复制、同源 iframe 与可调磨砂玻璃 UI。
@@ -50,22 +51,26 @@
             return fallback;
         }
     }
+    function getUpdatedAt(value) {
+        const updatedAt = Number(value?.updatedAt);
+        return Number.isFinite(updatedAt) ? updatedAt : 0;
+    }
     async function loadStored(key, fallback) {
+        const localValue = loadJson(key, null);
         try {
             if (GM.getValue) {
                 const value = await GM.getValue(key, null);
-                if (value != null)
-                    return typeof value === "string" ? JSON.parse(value) : value;
+                const gmValue = typeof value === "string" ? JSON.parse(value) : value;
+                if (gmValue != null)
+                    return localValue != null && getUpdatedAt(localValue) > getUpdatedAt(gmValue) ? localValue : gmValue;
             }
         }
         catch { }
-        return loadJson(key, fallback);
+        return localValue ?? fallback;
     }
-    function saveStored(key, value) {
-        try {
-            localStorage.setItem(key, JSON.stringify(value));
-        }
-        catch { }
+    const SAVE_DEBOUNCE_MS = 120;
+    const pendingStoredSaves = new Map();
+    function persistStored(key, value) {
         try {
             const result = GM.setValue?.(key, value);
             if (result?.catch)
@@ -73,8 +78,30 @@
         }
         catch { }
     }
+    function flushStored(key) {
+        const entries = key ? [[key, pendingStoredSaves.get(key)]] : Array.from(pendingStoredSaves.entries());
+        entries.forEach(([itemKey, pending]) => {
+            if (!pending)
+                return;
+            if (pending.timer != null)
+                clearTimeout(pending.timer);
+            pendingStoredSaves.delete(itemKey);
+            persistStored(itemKey, pending.value);
+        });
+    }
+    function saveStored(key, value) {
+        try {
+            localStorage.setItem(key, JSON.stringify(value));
+        }
+        catch { }
+        const previous = pendingStoredSaves.get(key);
+        if (previous?.timer != null)
+            clearTimeout(previous.timer);
+        const timer = window.setTimeout(() => flushStored(key), SAVE_DEBOUNCE_MS);
+        pendingStoredSaves.set(key, { value, timer });
+    }
     function saveConfig(options = {}) {
-        config = normalizeConfig(config);
+        config = normalizeConfig({ ...config, updatedAt: Date.now() });
         saveStored(STORAGE_KEY, config);
         applyAppearance();
         if (options.renderSettings !== false)
@@ -109,11 +136,51 @@
         next.highlightColor = isHexColor(next.highlightColor) ? next.highlightColor : defaultConfig.highlightColor;
         next.activeColor = isHexColor(next.activeColor) ? next.activeColor : defaultConfig.activeColor;
         next.shortcutKey = (String(next.shortcutKey || defaultConfig.shortcutKey).slice(0, 1).toLowerCase() || defaultConfig.shortcutKey);
-        next.floatingPosition = next.floatingPosition && typeof next.floatingPosition === "object"
-            ? { x: Number(next.floatingPosition.x) || 0, y: Number(next.floatingPosition.y) || 0 }
-            : null;
+        next.floatingPosition = normalizeFloatingPosition(next.floatingPosition);
         ["caseSensitive", "regex", "multiKeyword", "searchIframes", "showResults", "glass", "shortcutEnabled"].forEach((key) => { next[key] = !!next[key]; });
         return next;
+    };
+    const getViewportSize = () => {
+        const visual = window.visualViewport;
+        return {
+            width: Math.max(1, Math.round(visual?.width || window.innerWidth || document.documentElement.clientWidth || screen.width || 1)),
+            height: Math.max(1, Math.round(visual?.height || window.innerHeight || document.documentElement.clientHeight || screen.height || 1)),
+        };
+    };
+    const normalizeFloatingPosition = (position) => {
+        if (!position || typeof position !== "object")
+            return null;
+        const viewport = getViewportSize();
+        const assumedWidth = clampNumber(position.width, 24, 520, 36);
+        const assumedHeight = clampNumber(position.height, 24, 520, 36);
+        const x = Number(position.x);
+        const y = Number(position.y);
+        const left = Number(position.left);
+        const top = Number(position.top);
+        const rawX = Number.isFinite(x) ? x : (Number.isFinite(left) ? left : 6);
+        const rawY = Number.isFinite(y) ? y : (Number.isFinite(top) ? top : 6);
+        const anchorX = position.anchorX === "right" || position.anchorX === "left"
+            ? position.anchorX
+            : (rawX + assumedWidth / 2 > viewport.width / 2 ? "right" : "left");
+        const anchorY = position.anchorY === "bottom" || position.anchorY === "top"
+            ? position.anchorY
+            : (rawY + assumedHeight / 2 > viewport.height / 2 ? "bottom" : "top");
+        const right = Number(position.right);
+        const bottom = Number(position.bottom);
+        return {
+            x: rawX,
+            y: rawY,
+            left: Number.isFinite(left) ? left : rawX,
+            top: Number.isFinite(top) ? top : rawY,
+            right: Number.isFinite(right) ? right : Math.max(0, viewport.width - rawX - assumedWidth),
+            bottom: Number.isFinite(bottom) ? bottom : Math.max(0, viewport.height - rawY - assumedHeight),
+            width: assumedWidth,
+            height: assumedHeight,
+            vw: clampNumber(position.vw, 1, 10000, viewport.width),
+            vh: clampNumber(position.vh, 1, 10000, viewport.height),
+            anchorX,
+            anchorY,
+        };
     };
     const normalizeHistory = (items) => {
         const seen = new Set();
@@ -123,9 +190,9 @@
             .slice(0, HISTORY_LIMIT);
     };
     const formatScale = (value) => `${clampNumber(value, 1, 2, 1).toFixed(2).replace(/\.00$/, "").replace(/0$/, "")}×`;
-    const getDocs = () => {
+    const getDocs = (includeIframes = config.searchIframes) => {
         const docs = [document];
-        if (!config.searchIframes)
+        if (!includeIframes)
             return docs;
         document.querySelectorAll("iframe, frame").forEach((frame) => {
             try {
@@ -161,16 +228,24 @@
       .${MARK_CLASS}.${ACTIVE_CLASS} { background: ${config.activeColor} !important; outline: 2px solid ${config.activeColor}; }
     `;
     };
+    let uiRoot = null;
     const root = () => document.getElementById(ROOT_ID);
-    const input = () => document.querySelector(`#${ROOT_ID} .ps-input`);
-    const status = () => document.querySelector(`#${ROOT_ID} .ps-status`);
+    // light DOM 实现：iOS Safari 对 Shadow DOM 内部元素的点击/拖动不可靠，
+    // 悬浮球必须与页面处于同一棵 DOM 树，否则放大镜无法点击、也无法拖动。
+    const query = (selector) => root()?.querySelector(selector) ?? null;
+    const queryAll = (selector) => root()?.querySelectorAll(selector) ?? [];
+    const input = () => query(".ps-input");
+    const status = () => query(".ps-status");
     const setStatus = (text) => { const el = status(); if (el)
         el.textContent = text; };
     const addStyle = () => {
-        if (document.getElementById(STYLE_ID))
+        if (root() && document.getElementById(STYLE_ID))
             return;
-        const style = document.createElement("style");
-        style.id = STYLE_ID;
+        let style = document.getElementById(STYLE_ID);
+        if (!style) {
+            style = document.createElement("style");
+            style.id = STYLE_ID;
+        }
         style.textContent = `
       #${ROOT_ID} {
         position: fixed;
@@ -219,18 +294,19 @@
         touch-action: none; -webkit-touch-callout: none; user-select: none; -webkit-user-select: none;
       }
       #${ROOT_ID}.ps-glass .ps-toggle { backdrop-filter: blur(var(--ps-blur)); -webkit-backdrop-filter: blur(var(--ps-blur)); }
-      #${ROOT_ID} .ps-toggle svg { width: var(--ps-ui-toggle-icon-size, 23px); height: var(--ps-ui-toggle-icon-size, 23px); display: block; stroke: currentColor; }
+      #${ROOT_ID} .ps-toggle svg { width: var(--ps-ui-toggle-icon-size, 23px) !important; min-width: var(--ps-ui-toggle-icon-size, 23px); height: var(--ps-ui-toggle-icon-size, 23px) !important; min-height: var(--ps-ui-toggle-icon-size, 23px); flex: 0 0 var(--ps-ui-toggle-icon-size, 23px); display: block !important; stroke: currentColor; transform: none !important; }
+      #${ROOT_ID} .ps-toggle svg path { vector-effect: non-scaling-stroke; }
       #${ROOT_ID} .ps-toggle:active { transform: scale(.96); }
       #${ROOT_ID}.ps-topbar .ps-toggle { width: 100%; height: 30px; border-radius: 9px; }
       #${ROOT_ID} .ps-panel {
         display: none;
         flex-direction: column;
-        width: min(var(--ps-ui-panel-width, 171px), calc(100vw - 12px)); max-height: min(56vh, 400px); overflow: hidden;
+        width: min(var(--ps-ui-panel-width, 171px), calc(100vw - 12px)); max-height: min(var(--ps-available-panel-height, 56vh), 400px); overflow: hidden;
         padding: var(--ps-ui-panel-padding, 5px); border: 1px solid rgba(148, 163, 184, .38); border-radius: 10px;
         background: var(--ps-panel-bg); box-shadow: 0 8px 18px rgba(15, 23, 42, .2);
       }
       #${ROOT_ID}.ps-glass .ps-panel { backdrop-filter: blur(var(--ps-blur)); -webkit-backdrop-filter: blur(var(--ps-blur)); }
-      #${ROOT_ID}.ps-topbar .ps-panel { width: 100%; max-height: min(50vh, 360px); }
+      #${ROOT_ID}.ps-topbar .ps-panel { width: 100%; max-height: min(var(--ps-available-panel-height, 50vh), 360px); }
       #${ROOT_ID}.ps-open .ps-toggle { display: none; }
       #${ROOT_ID}.ps-open .ps-panel { display: flex; }
       #${ROOT_ID} .ps-title { flex: 0 0 auto; position: relative; display: flex; align-items: center; justify-content: center; margin-bottom: var(--ps-ui-gap, 3px); min-height: calc(var(--ps-ui-tab-height, 22px) + 1px); color: #0f172a; font-size: var(--ps-ui-title-font-size, 11px); font-weight: 800; text-align: center; cursor: move; touch-action: none; -webkit-touch-callout: none; user-select: none; -webkit-user-select: none; }
@@ -239,7 +315,8 @@
       #${ROOT_ID} .ps-tabs { flex: 0 0 auto; display: flex; justify-content: space-evenly; gap: 0; padding: 2px; margin-bottom: var(--ps-ui-gap, 3px); border-radius: 8px; background: rgba(241,245,249,.82); }
       #${ROOT_ID} .ps-tab { flex: 1 1 0; width: auto; height: var(--ps-ui-tab-height, 22px); padding: 0; border: 0; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; background: transparent; color: #475569; }
       #${ROOT_ID} .ps-tab.ps-active { background: rgba(255,255,255,.92); color: var(--ps-accent); box-shadow: 0 1px 2px rgba(15,23,42,.08); }
-      #${ROOT_ID} .ps-tab svg, #${ROOT_ID} .ps-search svg, #${ROOT_ID} .ps-nav svg { width: var(--ps-ui-icon-size, 14px); height: var(--ps-ui-icon-size, 14px); display: block; stroke: currentColor; fill: none; }
+      #${ROOT_ID} .ps-tab svg, #${ROOT_ID} .ps-search svg, #${ROOT_ID} .ps-nav svg { width: var(--ps-ui-icon-size, 14px) !important; min-width: var(--ps-ui-icon-size, 14px); height: var(--ps-ui-icon-size, 14px) !important; min-height: var(--ps-ui-icon-size, 14px); flex: 0 0 var(--ps-ui-icon-size, 14px); display: block !important; stroke: currentColor; fill: none; transform: none !important; }
+      #${ROOT_ID} .ps-tab svg path, #${ROOT_ID} .ps-search svg path, #${ROOT_ID} .ps-nav svg path { vector-effect: non-scaling-stroke; }
       #${ROOT_ID} .ps-page { display: none; min-height: 0; overflow: auto; -webkit-overflow-scrolling: touch; }
       #${ROOT_ID} .ps-page.ps-active { display: block; flex: 1 1 auto; }
       #${ROOT_ID} .ps-row { display: flex; gap: var(--ps-ui-gap, 3px); margin-bottom: var(--ps-ui-gap, 3px); }
@@ -277,24 +354,105 @@
     `;
         document.documentElement.appendChild(style);
     };
-    const clampFloatingPosition = (position) => {
+    const getFloatingMetrics = () => {
         const el = root();
-        if (!el || !position)
+        if (!el)
             return null;
         const rect = el.getBoundingClientRect();
-        const width = Math.max(rect.width || 36, 36);
-        const height = Math.max(rect.height || 36, 36);
-        const margin = 6;
         return {
-            x: Math.min(Math.max(Number(position.x) || margin, margin), Math.max(margin, window.innerWidth - width - margin)),
-            y: Math.min(Math.max(Number(position.y) || margin, margin), Math.max(margin, window.innerHeight - height - margin)),
+            width: Math.max(rect.width || 36, 36),
+            height: Math.max(rect.height || 36, 36),
+            viewport: getViewportSize(),
+            margin: 6,
         };
+    };
+    const clampFloatingPosition = (position) => {
+        const metrics = getFloatingMetrics();
+        if (!metrics || !position)
+            return null;
+        const { width, height, viewport, margin } = metrics;
+        return {
+            x: Math.min(Math.max(Number(position.x) || margin, margin), Math.max(margin, viewport.width - width - margin)),
+            y: Math.min(Math.max(Number(position.y) || margin, margin), Math.max(margin, viewport.height - height - margin)),
+        };
+    };
+    const resolveFloatingPosition = (position) => {
+        const metrics = getFloatingMetrics();
+        if (!metrics || !position)
+            return null;
+        const saved = normalizeFloatingPosition(position);
+        if (!saved)
+            return null;
+        const { width, height, viewport, margin } = metrics;
+        const anchorX = saved.anchorX === "right" || saved.anchorX === "left" ? saved.anchorX : "left";
+        const anchorY = saved.anchorY === "bottom" || saved.anchorY === "top" ? saved.anchorY : "top";
+        const x = anchorX === "right" ? viewport.width - width - Number(saved.right || 0) : Number(saved.left ?? saved.x);
+        const y = anchorY === "bottom" ? viewport.height - height - Number(saved.bottom || 0) : Number(saved.top ?? saved.y);
+        return clampFloatingPosition({ x, y });
+    };
+    const createFloatingPositionSnapshot = (position) => {
+        const pos = clampFloatingPosition(position);
+        const metrics = getFloatingMetrics();
+        if (!pos || !metrics)
+            return null;
+        const { width, height, viewport } = metrics;
+        const anchorX = pos.x + width / 2 > viewport.width / 2 ? "right" : "left";
+        const anchorY = pos.y + height / 2 > viewport.height / 2 ? "bottom" : "top";
+        return {
+            x: pos.x,
+            y: pos.y,
+            left: pos.x,
+            top: pos.y,
+            right: Math.max(0, viewport.width - pos.x - width),
+            bottom: Math.max(0, viewport.height - pos.y - height),
+            width,
+            height,
+            vw: viewport.width,
+            vh: viewport.height,
+            anchorX,
+            anchorY,
+        };
+    };
+    const clampToViewport = (value, min, max) => Math.min(Math.max(value, min), Math.max(min, max));
+    const getVisibleViewportRect = () => {
+        const viewport = window.visualViewport;
+        return {
+            left: Math.round(viewport?.offsetLeft || 0),
+            top: Math.round(viewport?.offsetTop || 0),
+            width: Math.max(1, Math.round(viewport?.width || window.innerWidth || document.documentElement.clientWidth || 1)),
+            height: Math.max(1, Math.round(viewport?.height || window.innerHeight || document.documentElement.clientHeight || 1)),
+        };
+    };
+    const keepPanelInVisibleViewport = () => {
+        const el = root();
+        if (!el)
+            return;
+        const visible = getVisibleViewportRect();
+        const margin = 8;
+        el.style.setProperty("--ps-available-panel-height", `${Math.max(140, visible.height - margin * 2)}px`);
+        const isEditingSearch = document.activeElement === input();
+        const isOpen = el.classList.contains("ps-open");
+        if (!isEditingSearch || !isOpen)
+            return;
+        const rect = el.getBoundingClientRect();
+        const maxLeft = visible.left + visible.width - rect.width - margin;
+        const maxTop = visible.top + visible.height - rect.height - margin;
+        const nextLeft = clampToViewport(rect.left, visible.left + margin, maxLeft);
+        const nextTop = clampToViewport(rect.top, visible.top + margin, maxTop);
+        if (Math.abs(nextLeft - rect.left) < 1 && Math.abs(nextTop - rect.top) < 1)
+            return;
+        el.style.left = `${nextLeft}px`;
+        el.style.top = `${nextTop}px`;
+        el.style.right = "auto";
+        el.style.bottom = "auto";
+        el.classList.add("ps-manual");
     };
     const applyAppearance = () => {
         const el = root();
         if (!el)
             return;
-        const manualPosition = config.position !== "topbar" ? clampFloatingPosition(config.floatingPosition) : null;
+        updateZoomCompensation();
+        const manualPosition = config.position !== "topbar" ? resolveFloatingPosition(config.floatingPosition) : null;
         el.classList.toggle("ps-top", config.position === "top");
         el.classList.toggle("ps-topbar", config.position === "topbar");
         el.classList.toggle("ps-bottom", config.position === "bottom");
@@ -317,42 +475,54 @@
         el.style.setProperty("--ps-active", config.activeColor);
         el.style.setProperty("--ps-blur", `${config.blur}px`);
         el.style.setProperty("--ps-panel-bg", config.glass ? `rgba(255,255,255,${Number(config.opacity) / 100})` : "rgba(255,255,255,.98)");
-        updateZoomCompensation();
+        keepPanelInVisibleViewport();
     };
+    const SCALE_LIMITS = {
+        minPageScale: 0.42,
+        maxBoost: 2.15,
+    };
+    const clampPx = (value, min, max) => `${Math.min(max, Math.max(min, Math.round(value)))}px`;
     const getPageZoomScale = () => {
-        const screenWidth = Number(screen.width) || window.innerWidth || 1;
-        const viewportScale = Number(window.visualViewport?.scale) || 1;
-        const layoutScale = window.innerWidth > 0 ? Math.min(1, screenWidth / window.innerWidth) : 1;
-        return Math.max(0.4, Math.min(1, viewportScale, layoutScale));
+        const viewport = window.visualViewport;
+        const layoutWidth = Math.max(1, window.innerWidth || document.documentElement.clientWidth || screen.width || 1);
+        const visibleWidth = Math.max(1, viewport?.width || layoutWidth);
+        const screenWidth = Math.max(1, Math.min(Number(screen.width) || layoutWidth, Number(screen.availWidth) || layoutWidth));
+        // Safari / desktop zoom usually changes layout viewport width; visualViewport covers pinch/page scale.
+        const layoutScale = Math.min(1, screenWidth / layoutWidth);
+        const visibleScale = Math.min(1, visibleWidth / layoutWidth);
+        const viewportScale = Math.min(1, Number(viewport?.scale) || 1);
+        const rawScale = Math.min(layoutScale, visibleScale, viewportScale);
+        // Round tiny viewport noise to avoid constant CSS variable rewrites while scrolling/keyboard animating.
+        return Math.max(SCALE_LIMITS.minPageScale, Math.min(1, Math.round(rawScale * 100) / 100));
     };
     const updateZoomCompensation = () => {
         const el = root();
         if (!el)
             return;
-        const scale = getPageZoomScale();
-        const boost = Math.max(1, Math.min(2.2, 1 / scale));
+        const pageScale = getPageZoomScale();
+        const boost = Math.min(SCALE_LIMITS.maxBoost, 1 / pageScale);
         const iconScale = clampNumber(config.iconScale, 1, 2, 1);
         const widthScale = clampNumber(config.uiWidthScale, 1, 2, 1);
-        const px = (base, max = Math.ceil(base * 2.2), multiplier = 1) => `${Math.min(max, Math.max(base, Math.round(base * boost * multiplier)))}px`;
-        const fontSize = Math.min(40, Math.max(16, Math.ceil(16 / scale)));
-        el.style.setProperty("--ps-input-font-size", `${fontSize}px`);
+        const px = (base, max = Math.ceil(base * SCALE_LIMITS.maxBoost), multiplier = 1) => clampPx(base * boost * multiplier, base, max);
+        const font = (base, max = Math.ceil(base * SCALE_LIMITS.maxBoost)) => clampPx(base * boost, base, max);
+        el.style.setProperty("--ps-input-font-size", font(16, 36));
         el.style.setProperty("--ps-ui-panel-width", px(171, 520, widthScale));
         el.style.setProperty("--ps-ui-topbar-width", `min(92vw, ${px(113, 420, widthScale)})`);
-        el.style.setProperty("--ps-ui-panel-padding", px(5, 10));
-        el.style.setProperty("--ps-ui-title-font-size", px(11, 22));
-        el.style.setProperty("--ps-ui-gap", px(7, 15));
-        el.style.setProperty("--ps-ui-tab-width", px(25, 52));
-        el.style.setProperty("--ps-ui-tab-height", px(22, 46));
+        el.style.setProperty("--ps-ui-panel-padding", px(5, 11));
+        el.style.setProperty("--ps-ui-title-font-size", font(11, 24));
+        el.style.setProperty("--ps-ui-gap", px(7, 16));
+        el.style.setProperty("--ps-ui-tab-width", px(25, 54));
+        el.style.setProperty("--ps-ui-tab-height", px(22, 48));
         el.style.setProperty("--ps-ui-icon-size", px(18, 76, iconScale));
         el.style.setProperty("--ps-ui-toggle-icon-size", px(23, 92, iconScale));
-        el.style.setProperty("--ps-ui-search-size", px(28, 58));
-        el.style.setProperty("--ps-ui-nav-size", px(27, 56));
+        el.style.setProperty("--ps-ui-search-size", px(28, 60));
+        el.style.setProperty("--ps-ui-nav-size", px(27, 58));
         el.style.setProperty("--ps-ui-input-pad-x", px(6, 14));
         el.style.setProperty("--ps-ui-input-extra-height", px(11, 24));
-        el.style.setProperty("--ps-ui-status-font-size", px(11, 22));
-        el.style.setProperty("--ps-ui-result-font-size", px(11, 22));
-        el.style.setProperty("--ps-ui-setting-font-size", px(11, 22));
-        el.style.setProperty("--ps-ui-range-width", px(70, 140));
+        el.style.setProperty("--ps-ui-status-font-size", font(11, 23));
+        el.style.setProperty("--ps-ui-result-font-size", font(11, 23));
+        el.style.setProperty("--ps-ui-setting-font-size", font(11, 23));
+        el.style.setProperty("--ps-ui-range-width", px(70, 150));
     };
     let viewportMeta = null;
     let viewportMetaContent = null;
@@ -391,25 +561,40 @@
     };
     const setupInputZoomGuard = (el) => {
         el.addEventListener("focusin", (event) => {
-            if (event.target instanceof HTMLInputElement && event.target.classList.contains("ps-input"))
+            if (event.target instanceof HTMLInputElement && event.target.classList.contains("ps-input")) {
                 lockViewportZoom();
+                setTimeout(() => keepPanelInVisibleViewport(), 60);
+                setTimeout(() => keepPanelInVisibleViewport(), 280);
+            }
         });
         el.addEventListener("focusout", (event) => {
-            if (event.target instanceof HTMLInputElement && event.target.classList.contains("ps-input"))
+            if (event.target instanceof HTMLInputElement && event.target.classList.contains("ps-input")) {
                 unlockViewportZoom();
+                setTimeout(() => applyAppearance(), 320);
+            }
         });
-        window.visualViewport?.addEventListener("resize", updateZoomCompensation);
-        window.addEventListener("resize", updateZoomCompensation);
+        window.visualViewport?.addEventListener("resize", applyAppearance);
+        window.addEventListener("resize", applyAppearance);
     };
     const switchTab = (tab) => {
-        root()?.querySelectorAll(".ps-tab").forEach((button) => button.classList.toggle("ps-active", button.getAttribute("data-tab") === tab));
-        root()?.querySelectorAll(".ps-page").forEach((page) => page.classList.toggle("ps-active", page.getAttribute("data-page") === tab));
+        queryAll(".ps-tab").forEach((button) => button.classList.toggle("ps-active", button.getAttribute("data-tab") === tab));
+        queryAll(".ps-page").forEach((page) => page.classList.toggle("ps-active", page.getAttribute("data-page") === tab));
         if (tab === "settings")
             renderSettings();
         if (tab === "history")
             renderHistory();
     };
+    const unwrapMark = (mark) => {
+        const doc = mark.ownerDocument;
+        const parent = mark.parentNode;
+        if (!parent)
+            return;
+        parent.replaceChild(doc.createTextNode(mark.textContent ?? ""), mark);
+        parent.normalize();
+    };
     const isSearchableElement = (element) => {
+        if (!(element instanceof HTMLElement))
+            return false;
         let current = element;
         while (current && current !== current.ownerDocument.documentElement) {
             if (current.id === ROOT_ID || (current !== element && current.classList?.contains(MARK_CLASS)))
@@ -431,7 +616,7 @@
     const isVisible = (element) => isSearchableElement(element);
     const shouldSkip = (node) => {
         const parent = node.parentElement;
-        if (!parent)
+        if (!parent || !(parent instanceof HTMLElement))
             return true;
         return !isSearchableElement(parent);
     };
@@ -453,12 +638,11 @@
             activeIndex = 0;
     };
     const clear = () => {
-        getDocs().forEach((doc) => doc.querySelectorAll(`.${MARK_CLASS}`).forEach((mark) => {
+        getDocs(true).forEach((doc) => doc.querySelectorAll(`.${MARK_CLASS}`).forEach((mark) => {
             const parent = mark.parentNode;
             if (!parent)
                 return;
-            parent.replaceChild(doc.createTextNode(mark.textContent ?? ""), mark);
-            parent.normalize();
+            unwrapMark(mark);
         }));
         matches = [];
         activeIndex = -1;
@@ -506,7 +690,11 @@
         });
         if (!filtered.length)
             return;
+        const parent = node.parentNode;
+        if (!parent)
+            return;
         const fragment = node.ownerDocument.createDocumentFragment();
+        const createdMarks = [];
         let lastIndex = 0;
         filtered.forEach((range) => {
             if (range.start > lastIndex)
@@ -516,12 +704,18 @@
             mark.textContent = text.slice(range.start, range.end);
             mark.dataset.term = String(range.termIndex);
             fragment.appendChild(mark);
-            matches.push(mark);
+            createdMarks.push(mark);
             lastIndex = range.end;
         });
         if (lastIndex < text.length)
             fragment.appendChild(node.ownerDocument.createTextNode(text.slice(lastIndex)));
-        node.parentNode?.replaceChild(fragment, node);
+        parent.replaceChild(fragment, node);
+        createdMarks.forEach((mark) => {
+            if (isLocatableMark(mark))
+                matches.push(mark);
+            else
+                unwrapMark(mark);
+        });
     };
     const getSnippet = (mark) => {
         const text = (mark.parentElement?.textContent || mark.textContent || "").replace(/\s+/g, " ").trim();
@@ -540,7 +734,7 @@
         saveHistory();
     };
     const renderResults = () => {
-        const list = document.querySelector(`#${ROOT_ID} .ps-result-list`);
+        const list = query(".ps-result-list");
         if (!list)
             return;
         pruneMatches();
@@ -557,7 +751,7 @@
     `).join("") + (matches.length > max ? `<button class="ps-result" type="button" disabled>还有 ${matches.length - max} 个结果未显示</button>` : "");
     };
     const renderHistory = () => {
-        const list = document.querySelector(`#${ROOT_ID} .ps-history-list`);
+        const list = query(".ps-history-list");
         if (!list)
             return;
         list.classList.toggle("ps-visible", history.length > 0);
@@ -662,7 +856,7 @@
         }
     };
     const renderSettings = () => {
-        const page = document.querySelector(`#${ROOT_ID} [data-page="settings"]`);
+        const page = query('[data-page="settings"]');
         if (!page)
             return;
         page.innerHTML = `
@@ -693,9 +887,8 @@
         setTimeout(() => input()?.focus(), 0);
     };
     const createPanel = () => {
-        if (document.getElementById(ROOT_ID))
-            return;
-        addStyle();
+        document.getElementById(ROOT_ID)?.remove();
+        document.getElementById(STYLE_ID)?.remove();
         const el = document.createElement("div");
         el.id = ROOT_ID;
         el.innerHTML = `
@@ -723,23 +916,28 @@
       </div>
     `;
         document.documentElement.appendChild(el);
+        addStyle();
         applyAppearance();
         renderSettings();
         renderHistory();
-        el.querySelector(".ps-toggle")?.addEventListener("click", (event) => { if (el.dataset.dragged === "true") {
-            event.preventDefault();
-            el.dataset.dragged = "";
-            return;
-        } openPanel("search"); });
-        el.querySelector(".ps-close")?.addEventListener("click", () => { el.classList.remove("ps-open"); applyAppearance(); });
-        el.querySelectorAll(".ps-tab").forEach((button) => button.addEventListener("click", () => switchTab(button.getAttribute("data-tab") || "search")));
-        el.querySelector(".ps-search")?.addEventListener("click", search);
-        el.querySelector(".ps-prev")?.addEventListener("click", () => go(-1));
-        el.querySelector(".ps-next")?.addEventListener("click", () => go(1));
-        el.querySelector(".ps-export")?.addEventListener("click", copyResult);
-        el.querySelector(".ps-clear")?.addEventListener("click", () => { clear(); if (input())
+        // light DOM 下 click 行为可靠：直接绑定放大镜点击，并用 dataset.dragged 区分拖动。
+        query(".ps-toggle")?.addEventListener("click", (event) => {
+            if (el.dataset.dragged === "true") {
+                event.preventDefault();
+                el.dataset.dragged = "";
+                return;
+            }
+            openPanel("search");
+        });
+        query(".ps-close")?.addEventListener("click", () => { el.classList.remove("ps-open"); applyAppearance(); });
+        queryAll(".ps-tab").forEach((button) => button.addEventListener("click", () => switchTab(button.getAttribute("data-tab") || "search")));
+        query(".ps-search")?.addEventListener("click", search);
+        query(".ps-prev")?.addEventListener("click", () => go(-1));
+        query(".ps-next")?.addEventListener("click", () => go(1));
+        query(".ps-export")?.addEventListener("click", copyResult);
+        query(".ps-clear")?.addEventListener("click", () => { clear(); if (input())
             input().value = ""; setStatus("已清除高亮"); input()?.focus(); });
-        el.querySelector(".ps-clear-history")?.addEventListener("click", () => { history = []; saveHistory(); });
+        query(".ps-clear-history")?.addEventListener("click", () => { history = []; saveHistory(); });
         el.addEventListener("click", (event) => {
             const target = event.target instanceof Element ? event.target.closest(".ps-reset-position") : null;
             if (!target)
@@ -750,18 +948,18 @@
             saveConfig();
             setStatus("悬浮位置已重置到右下角");
         });
-        el.querySelector(".ps-input")?.addEventListener("keydown", (event) => { if (event.key === "Enter")
+        query(".ps-input")?.addEventListener("keydown", (event) => { if (event.key === "Enter")
             search(); if (event.key === "Escape") {
             el.classList.remove("ps-open");
             applyAppearance();
         } });
-        el.querySelector(".ps-result-list")?.addEventListener("click", (event) => {
+        query(".ps-result-list")?.addEventListener("click", (event) => {
             const target = event.target instanceof Element ? event.target.closest(".ps-result") : null;
             if (!target || target.hasAttribute("disabled"))
                 return;
             jumpTo(Number(target.getAttribute("data-index")));
         });
-        el.querySelector(".ps-history-list")?.addEventListener("click", (event) => {
+        query(".ps-history-list")?.addEventListener("click", (event) => {
             const target = event.target instanceof Element ? event.target.closest(".ps-history-item") : null;
             if (!target)
                 return;
@@ -775,27 +973,52 @@
         el.addEventListener("change", handleConfigChange);
         setupInputZoomGuard(el);
         setupDrag(el);
+        setupStyleRecovery();
+    };
+    let styleRecoveryStarted = false;
+    const setupStyleRecovery = () => {
+        if (styleRecoveryStarted)
+            return;
+        styleRecoveryStarted = true;
+        const heal = () => {
+            const el = root();
+            if (!el)
+                return;
+            const style = document.getElementById(STYLE_ID);
+            const looksUnstyled = getComputedStyle(el).position !== "fixed" || !style || !style.textContent?.includes(`#${ROOT_ID} .ps-panel`);
+            if (looksUnstyled) {
+                addStyle();
+                applyAppearance();
+            }
+        };
+        window.addEventListener("pageshow", heal);
+        document.addEventListener("visibilitychange", heal);
+        new MutationObserver(heal).observe(document.documentElement, { childList: true });
+        setTimeout(heal, 50);
+        setTimeout(heal, 500);
     };
     const setupDrag = (el) => {
+        // 放大镜保留为纯点击控件；面板打开后拖动标题移动面板。
+        const surfaces = [el.querySelector(".ps-toggle"), el.querySelector(".ps-title")].filter(Boolean);
+        if (!surfaces.length)
+            return;
         let dragging = false;
+        let moved = false;
+        let pointerId = null;
         let startX = 0;
         let startY = 0;
         let baseX = 0;
         let baseY = 0;
-        let moved = false;
-        let dragPointerId = null;
         const begin = (event) => {
-            if (config.position === "topbar")
+            if (config.position === "topbar" || dragging)
                 return;
             const target = event.target instanceof Element ? event.target : null;
-            if (!target?.closest(".ps-toggle, .ps-title"))
-                return;
-            if (target.closest(".ps-close, input, select, textarea, .ps-tab, .ps-nav, .ps-search, .ps-result, .ps-history-item"))
+            if (!target || target.closest(".ps-close"))
                 return;
             const rect = el.getBoundingClientRect();
             dragging = true;
             moved = false;
-            dragPointerId = event.pointerId;
+            pointerId = event.pointerId;
             startX = event.clientX;
             startY = event.clientY;
             baseX = rect.left;
@@ -805,15 +1028,11 @@
             el.style.right = "auto";
             el.style.bottom = "auto";
             el.classList.add("ps-manual");
-            target.setPointerCapture?.(event.pointerId);
-            event.preventDefault();
-            event.stopPropagation();
+            event.currentTarget?.setPointerCapture?.(event.pointerId);
         };
         const move = (event) => {
-            if (!dragging || (dragPointerId != null && event.pointerId !== dragPointerId))
+            if (!dragging || event.pointerId !== pointerId)
                 return;
-            event.preventDefault();
-            event.stopPropagation();
             const dx = event.clientX - startX;
             const dy = event.clientY - startY;
             if (!moved && Math.abs(dx) < 5 && Math.abs(dy) < 5)
@@ -826,25 +1045,28 @@
             el.style.top = `${pos.y}px`;
             el.style.right = "auto";
             el.style.bottom = "auto";
+            event.preventDefault();
         };
         const end = (event) => {
-            if (!dragging || (dragPointerId != null && event.pointerId !== dragPointerId))
+            if (!dragging || event.pointerId !== pointerId)
                 return;
-            event.preventDefault();
-            event.stopPropagation();
             dragging = false;
-            dragPointerId = null;
-            if (moved) {
-                config.floatingPosition = clampFloatingPosition({ x: parseFloat(el.style.left) || 0, y: parseFloat(el.style.top) || 0 });
-                el.dataset.dragged = "true";
-                saveConfig();
-                setTimeout(() => { el.dataset.dragged = ""; }, 350);
-            }
+            pointerId = null;
+            event.currentTarget?.releasePointerCapture?.(event.pointerId);
+            if (!moved)
+                return;
+            el.dataset.dragged = "true";
+            setTimeout(() => { el.dataset.dragged = ""; }, 350);
+            config.floatingPosition = createFloatingPositionSnapshot({ x: parseFloat(el.style.left) || 0, y: parseFloat(el.style.top) || 0 });
+            saveConfig();
+            event.preventDefault();
         };
-        el.addEventListener("pointerdown", begin);
-        document.addEventListener("pointermove", move, true);
-        document.addEventListener("pointerup", end, true);
-        document.addEventListener("pointercancel", end, true);
+        surfaces.forEach((surface) => {
+            surface.addEventListener("pointerdown", begin);
+            surface.addEventListener("pointermove", move);
+            surface.addEventListener("pointerup", end);
+            surface.addEventListener("pointercancel", end);
+        });
     };
     const shouldHandleConfigEvent = (event) => {
         const target = event.target;
@@ -897,12 +1119,17 @@
             config.shortcutKey = (target.value || "k").slice(0, 1).toLowerCase();
         const affectsSearch = ["ps-config-case", "ps-config-regex", "ps-config-multi", "ps-config-iframes"].some((cls) => target.classList.contains(cls));
         const affectsMarkColors = ["ps-config-highlight", "ps-config-active"].some((cls) => target.classList.contains(cls));
-        saveConfig({ renderSettings: event.type === "change", renderResults: !target.classList.contains("ps-config-shortcut") });
+        saveConfig({ renderSettings: false, renderResults: !target.classList.contains("ps-config-shortcut") && !affectsSearch });
         if (affectsMarkColors)
-            getDocs().forEach(ensureDocStyle);
+            getDocs(true).forEach(ensureDocStyle);
         if (affectsSearch && input()?.value.trim())
             search();
     };
+    window.addEventListener("pagehide", () => flushStored());
+    document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "hidden")
+            flushStored();
+    });
     document.addEventListener("keydown", (event) => {
         if (!config.shortcutEnabled)
             return;
